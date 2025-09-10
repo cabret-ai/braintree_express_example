@@ -6,6 +6,6 @@ services:
     ports:
       - '4567:4567'
     volumes:
-      - .:/braintree_express_example
+      - .:/stripe_express_example
     environment:
       - PORT=4567

@@ -1,8 +1,6 @@
-# Braintree Express Example
+# Stripe Express Example
 
-[![Build Status](https://github.com/braintree/braintree_express_example/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/braintree/braintree_express_example/actions/workflows/ci.yml)
-
-An example Braintree integration for Node in the Express framework.
+An example Stripe integration for Node in the Express framework.
 
 ## Setup Instructions
 
@@ -12,7 +10,7 @@ An example Braintree integration for Node in the Express framework.
    npm install
    ```
 
-2. Copy the contents of `example.env` into a new file named `.env` and fill in your Braintree API credentials. Credentials can be found by navigating to Account > My User > View Authorizations in the Braintree Control Panel. Full instructions can be [found on our support site](https://articles.braintreepayments.com/control-panel/important-gateway-credentials#api-credentials).
+2. Copy the contents of `example.env` into a new file named `.env` and fill in your Stripe API credentials. Credentials can be found in the Stripe Dashboard under Developers > API keys. Full instructions can be [found in the Stripe documentation](https://stripe.com/docs/keys).
 
 3. Start the server:
 
@@ -26,18 +24,18 @@ An example Braintree integration for Node in the Express framework.
 
 To run unit tests, use `npm run test:unit`. These do not require a server and do not make API calls.
 
-To run all tests, run `npm test`. This requires the server be up (in a separate shell using `npm run dev` or `npm start`) to make the relevant API calls to Braintree. `npm test` requires that your _sandbox_ Braintree credentials be set up [as detailed above](#setup-instructions).
+To run all tests, run `npm test`. This requires the server be up (in a separate shell using `npm run dev` or `npm start`) to make the relevant API calls to Stripe. `npm test` requires that your _test mode_ Stripe credentials be set up [as detailed above](#setup-instructions).
+
+## Supported Payment Methods
+
+This integration supports the following payment methods:
+
+- **Credit/Debit Cards**: All major card networks (Visa, Mastercard, American Express, Discover)
 
 ## Testing Transactions
 
-Sandbox transactions must be made with [sample credit card numbers](https://developers.braintreepayments.com/reference/general/testing/node#credit-card-numbers), and the response of a `Transaction.sale()` call is dependent on the [amount of the transaction](https://developers.braintreepayments.com/reference/general/testing/node#test-amounts).
-
-## Help
-
-- Found a bug? Have a suggestion for improvement? Want to tell us we're awesome? [Submit an issue](https://github.com/braintree/braintree_express_example/issues)
-- Trouble with your integration? Contact [Braintree Support](https://support.braintreepayments.com/) / support@braintreepayments.com
-- Want to contribute? [Submit a pull request](https://help.github.com/articles/creating-a-pull-request)
+Test mode transactions must be made with [test credit card numbers](https://stripe.com/docs/testing#cards). Different card numbers can be used to trigger specific responses and test various scenarios.
 
 ## Disclaimer
 
-This code is provided as is and is only intended to be used for illustration purposes. This code is not production-ready and is not meant to be used in a production environment. This repository is to be used as a tool to help merchants learn how to integrate with Braintree. Any use of this repository or any of its code in a production environment is highly discouraged.
+This code is provided as is and is only intended to be used for illustration purposes. This code is not production-ready and is not meant to be used in a production environment. This repository is to be used as a tool to help merchants learn how to integrate with Stripe. Any use of this repository or any of its code in a production environment is highly discouraged.

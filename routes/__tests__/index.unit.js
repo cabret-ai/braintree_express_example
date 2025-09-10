@@ -1,12 +1,43 @@
 const supertest = require('supertest');
-const { approved } = require('../../lib/__fixtures__/gateway');
-const app = require('../../app');
 
-jest.mock('../../lib/gateway');
+process.env.USE_STRIPE = 'true';
+process.env.STRIPE_PUBLISHABLE_KEY = 'pk_test_mock_key';
+process.env.STRIPE_SECRET_KEY = 'sk_test_mock_key';
+
+jest.mock('stripe', () => {
+  return jest.fn().mockImplementation(() => ({
+    paymentIntents: {
+      create: jest.fn(),
+      retrieve: jest.fn(),
+      confirm: jest.fn(),
+    },
+    customers: {
+      create: jest.fn(),
+      retrieve: jest.fn(),
+      update: jest.fn(),
+      list: jest.fn(),
+    },
+    paymentMethods: {
+      attach: jest.fn(),
+      detach: jest.fn(),
+      list: jest.fn(),
+    },
+    refunds: {
+      create: jest.fn(),
+    },
+    webhookEndpoints: {
+      create: jest.fn(),
+      list: jest.fn(),
+    },
+  }));
+});
+
+const app = require('../../app');
+const stripeGateway = require('../../lib/stripe-gateway');
 
 const { get, post } = supertest(app);
 
-describe('Braintree demo routes', () => {
+describe('Stripe demo routes', () => {
   describe('index', () => {
     it('redirects to the checkouts drop-in page', () =>
       get('/').then(({ header, statusCode }) => {
@@ -21,9 +52,11 @@ describe('Braintree demo routes', () => {
         expect(statusCode).toBe(200);
       }));
 
-    it('generates a client token', () =>
+    it('includes the Stripe publishable key', () =>
       get('/checkouts/new').then(({ text }) => {
-        expect(text).toMatch('<span hidden id="client-token">');
+        expect(text).toMatch(
+          '<span hidden id="client-token">pk_test_mock_key</span>'
+        );
       }));
 
     it('includes the checkout form', () =>
@@ -31,9 +64,13 @@ describe('Braintree demo routes', () => {
         expect(text).toMatch(/<form id="payment-form"/);
       }));
 
-    it('includes the dropin div', () =>
+    it('includes the Stripe payment element container', () =>
       get('/checkouts/new').then(({ text }) => {
-        expect(text).toMatch(/<div id="bt-dropin"/);
+        const hasCardElement = /<div id="card-element"/.test(text);
+        const hasStripeErrors = /<div id="stripe-errors"/.test(text);
+
+        expect(hasCardElement).toBe(true);
+        expect(hasStripeErrors).toBe(true);
       }));
 
     it('includes the amount field', () =>
@@ -46,133 +83,191 @@ describe('Braintree demo routes', () => {
   });
 
   describe('Checkouts show page', () => {
-    it('respond with 200', () =>
-      get('/checkouts/11111111').then(({ statusCode }) => {
-        expect(statusCode).toBe(200);
-      }));
+    beforeEach(() => {
+      stripeGateway.stripe.paymentIntents.retrieve.mockResolvedValue({
+        id: 'pi_test_success',
+        amount: 1000,
+        currency: 'usd',
+        status: 'succeeded',
+        payment_method: 'pm_test_card',
+        charges: {
+          data: [
+            {
+              payment_method_details: {
+                card: {
+                  brand: 'visa',
+                  last4: '4242',
+                  exp_month: 12,
+                  exp_year: 2025,
+                },
+              },
+            },
+          ],
+        },
+      });
+    });
 
-    it("displays the transaction's fields", () =>
-      get('/checkouts/11111111').then(({ text }) => {
-        const { creditCard, amount, type, status } = approved;
+    it('respond with 200 for Stripe payment intent', async () => {
+      const res = await get('/checkouts/pi_test_success');
 
-        expect(text).toMatch('11111111');
-        expect(text).toMatch(type);
-        expect(text).toMatch(amount);
-        expect(text).toMatch(status);
-        expect(text).toMatch(creditCard.bin);
-        expect(text).toMatch(creditCard.last4);
-        expect(text).toMatch(creditCard.cardType);
-        expect(text).toMatch(creditCard.expirationDate);
-      }));
+      expect(res.statusCode).toBe(200);
+    });
 
-    it('displays a success page when transaction succeeded', () =>
-      get('/checkouts/11111111').then(({ text }) => {
-        expect(text).toMatch('Sweet Success!');
-      }));
+    it("displays the payment intent's fields", async () => {
+      const res = await get('/checkouts/pi_test_success');
 
-    it('displays a failure page when transaction failed', () =>
-      get('/checkouts/22222222').then(({ text }) => {
-        expect(text).toMatch('Transaction Failed');
-        expect(text).toMatch(
-          'Your test transaction has a status of processor_declined'
-        );
-      }));
+      expect(res.text).toMatch('pi_test_success');
+      expect(res.text).toMatch('10.00');
+      expect(res.text).toMatch('Settled');
+      expect(res.text).toMatch('4242');
+      expect(res.text).toMatch('visa');
+    });
+
+    it('displays a success page when payment succeeded', async () => {
+      const res = await get('/checkouts/pi_test_success');
+
+      expect(res.text).toMatch('Sweet Success!');
+    });
+
+    it('displays a failure page when payment failed', async () => {
+      stripeGateway.stripe.paymentIntents.retrieve.mockResolvedValue({
+        id: 'pi_test_failed',
+        amount: 1000,
+        currency: 'usd',
+        status: 'canceled',
+        payment_method: 'pm_test_card',
+      });
+
+      const res = await get('/checkouts/pi_test_failed');
+
+      expect(res.text).toMatch('Transaction Failed');
+      expect(res.text).toMatch('Your test transaction has a status of Voided');
+    });
   });
 
   describe('Checkouts create', () => {
-    it('creates a transaction and redirects to checkout show', () =>
-      post('/checkouts')
-        .send({
-          amount: '10.00',
-          payment_method_nonce: 'fake-valid-nonce', // eslint-disable-line camelcase
-        })
-        .then(({ statusCode }) => {
-          expect(statusCode).toBe(302);
-        }));
+    beforeEach(() => {
+      jest.clearAllMocks();
+    });
 
-    describe('when the transaction is not successful', () => {
-      describe('when Braintree returns an error', () => {
-        it('redirects to the drop-in checkout page if transaction is not created', () =>
-          post('/checkouts')
-            .send({
-              amount: 'not_a_valid_amount',
-              payment_method_nonce: 'not_a_valid_nonce', // eslint-disable-line camelcase
-            })
-            .then(({ headers, statusCode }) => {
-              expect(statusCode).toBe(302);
-              expect(headers.location).toBe('checkouts/new');
-            }));
-
-        it('displays errors for invalid amount', () =>
-          post('/checkouts')
-            .send({
-              amount: 'not_a_valid_amount',
-              payment_method_nonce: 'fake-valid-nonce', // eslint-disable-line camelcase
-            })
-            .then((res) => {
-              const req = get('/checkouts/new');
-              const cookie = res.headers['set-cookie'];
-
-              req.set('Cookie', cookie);
-
-              return req.then(({ text }) =>
-                expect(text).toMatch(
-                  'Error: 81503: Amount is an invalid format.'
-                )
-              );
-            }));
-
-        it('displays errors for invalid nonce', () =>
-          post('/checkouts')
-            .send({
-              amount: '9999.99',
-              payment_method_nonce: 'not_a_valid_nonce', // eslint-disable-line camelcase
-            })
-            .then((res) => {
-              const req = get('/checkouts/new');
-              const cookie = res.headers['set-cookie'];
-
-              req.set('Cookie', cookie);
-
-              return req.then(({ text }) =>
-                expect(text).toMatch(
-                  'Error: 91565: Unknown or expired payment_method_nonce.'
-                )
-              );
-            }));
+    it('handles successful payment and redirects to checkout show', async () => {
+      stripeGateway.stripe.paymentIntents.retrieve.mockResolvedValue({
+        id: 'pi_test_success',
+        status: 'succeeded',
       });
 
-      describe('when there are processor errors', () => {
-        it('redirects to the new checkout page', () =>
-          post('/checkouts')
-            .send({
-              amount: '2000.00',
-              payment_method_nonce: 'fake-valid-nonce', // eslint-disable-line camelcase
-            })
-            .then(({ headers, statusCode }) => {
-              expect(statusCode).toBe(302);
-              expect(headers.location).toMatch(/checkouts\/\S{1,64}/);
-            }));
+      const res = await post('/checkouts').send({
+        payment_intent_id: 'pi_test_success',
+      });
 
-        it('displays the transaction status', () =>
-          post('/checkouts')
-            .send({
-              amount: '2000.00',
-              payment_method_nonce: 'fake-valid-nonce', // eslint-disable-line camelcase
-            })
-            .then((res) => {
-              const redirectUrl = `/${res.req.res.headers.location}`;
-              const req = get(redirectUrl);
-              const cookie = res.headers['set-cookie'];
+      expect(res.statusCode).toBe(302);
+      expect(res.headers.location).toBe('/checkouts/pi_test_success');
+    });
 
-              req.set('Cookie', cookie);
+    describe('when the payment is not successful', () => {
+      it('redirects to new page when payment intent ID is missing', async () => {
+        const res = await post('/checkouts').send({});
 
-              return req.then(({ text }) =>
-                expect(text).toMatch(
-                  'Your test transaction has a status of processor_declined'
-                )
-              );
-            }));
+        expect(res.statusCode).toBe(302);
+        expect(res.headers.location).toBe('checkouts/new');
+      });
+
+      it('displays error for missing payment intent ID', async () => {
+        const res = await post('/checkouts').send({});
+
+        const req = get('/checkouts/new');
+        const cookie = res.headers['set-cookie'];
+
+        req.set('Cookie', cookie);
+
+        const response = await req;
+
+        expect(response.text).toMatch('Payment intent ID is required');
+      });
+
+      it('handles payment that requires additional action', async () => {
+        stripeGateway.stripe.paymentIntents.retrieve.mockResolvedValue({
+          id: 'pi_test_action',
+          status: 'requires_action',
+        });
+
+        const res = await post('/checkouts').send({
+          payment_intent_id: 'pi_test_action',
+        });
+
+        expect(res.statusCode).toBe(302);
+        expect(res.headers.location).toBe('checkouts/new');
+      });
+
+      it('handles failed payment', async () => {
+        stripeGateway.stripe.paymentIntents.retrieve.mockResolvedValue({
+          id: 'pi_test_failed',
+          status: 'canceled',
+        });
+
+        const res = await post('/checkouts').send({
+          payment_intent_id: 'pi_test_failed',
+        });
+
+        expect(res.statusCode).toBe(302);
+        expect(res.headers.location).toBe('checkouts/new');
+      });
+
+      it('handles Stripe API errors', async () => {
+        stripeGateway.stripe.paymentIntents.retrieve.mockRejectedValue(
+          new Error('Stripe API error')
+        );
+
+        const res = await post('/checkouts').send({
+          payment_intent_id: 'pi_test_error',
+        });
+
+        expect(res.statusCode).toBe(302);
+        expect(res.headers.location).toBe('checkouts/new');
+      });
+    });
+  });
+
+  describe('Payment Intent Creation', () => {
+    beforeEach(() => {
+      jest.clearAllMocks();
+    });
+
+    it('creates payment intent for card payment', async () => {
+      stripeGateway.stripe.paymentIntents.create.mockResolvedValue({
+        id: 'pi_test_card',
+        client_secret: 'pi_test_card_secret',
+        amount: 1000,
+        currency: 'usd',
+      });
+
+      const res = await post('/api/create-payment-intent').send({ amount: 10 });
+
+      expect(res.statusCode).toBe(200);
+      expect(res.body).toEqual({
+        clientSecret: 'pi_test_card_secret',
+        paymentIntentId: 'pi_test_card',
+      });
+
+      expect(stripeGateway.stripe.paymentIntents.create).toHaveBeenCalledWith({
+        amount: 1000,
+        currency: 'usd',
+        automatic_payment_methods: { enabled: true },
+      });
+    });
+
+    it('handles payment intent creation errors', async () => {
+      stripeGateway.stripe.paymentIntents.create.mockRejectedValue(
+        new Error('Invalid amount')
+      );
+
+      const res = await post('/api/create-payment-intent').send({
+        amount: -10,
+      });
+
+      expect(res.statusCode).toBe(400);
+      expect(res.body).toEqual({
+        error: 'Payment intent creation failed. Please try again.',
       });
     });
   });

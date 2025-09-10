@@ -4,7 +4,10 @@ block content
   .wrapper: .checkout.container: .content
     header
       h1 Hi, #[br] Let's test a transaction
-      p Make a test payment with Braintree using PayPal or a card
+      if useStripe
+        p Make a test payment with Stripe using a card
+      else
+        p Make a test payment with Braintree using PayPal or a card
 
     form#payment-form(action="/checkouts", method="post")
       section
@@ -13,14 +16,28 @@ block content
           .input-wrapper.amount-wrapper
             input#amount(name="amount" type="tel" min="1" value="10")
 
-        .bt-drop-in-wrapper
-          #bt-dropin
+        if useStripe
+          .stripe-payment-wrapper
+            #card-element-container.stripe-element-container
+              #card-element
+            
+            #stripe-errors(role="alert")
+        else
+          .bt-drop-in-wrapper
+            #bt-dropin
 
       input#nonce(type="hidden" name="payment_method_nonce")
+      input#payment-intent-id(type="hidden" name="payment_intent_id")
       button.button(type="submit")
         span Test Transaction
 
   span(hidden id="client-token")=clientToken
+  span(hidden id="use-stripe")=useStripe
 
-  script(src="https://js.braintreegateway.com/web/dropin/1.41.0/js/dropin.min.js")
-  script(type="text/javascript", src="/javascript/demo.js")
+  if useStripe
+    link(rel="stylesheet" href="/stylesheets/stripe-styles.css")
+    script(src="https://js.stripe.com/v3/")
+    script(type="text/javascript", src="/javascript/stripe-demo.js")
+  else
+    script(src="https://js.braintreegateway.com/web/dropin/1.41.0/js/dropin.min.js")
+    script(type="text/javascript", src="/javascript/demo.js")

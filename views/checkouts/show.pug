@@ -11,7 +11,10 @@ block content
         p= result.message
     else
       section
-        p Test another transaction or see the Braintree API response.
+        if transaction.id && transaction.id.startsWith('pi_')
+          p Test another transaction or see the Stripe API response.
+        else
+          p Test another transaction or see the Braintree API response.
 
     section
       a.button.primary.back(href="/checkouts/new")
@@ -19,7 +22,10 @@ block content
 
   aside.drawer.dark
     header: .content.compact
-      a.braintree(href='https://developers.braintreepayments.com', target='_blank') Braintree
+      if transaction.id && transaction.id.startsWith('pi_')
+        a.stripe(href='https://stripe.com/docs', target='_blank') Stripe
+      else
+        a.stripe(href='https://docs.stripe.com/payments', target='_blank') Stripe
       h3 API Response
 
     article.content.compact
@@ -32,81 +38,112 @@ block content
               th id
               td= transaction.id
             tr
-              th type
-              td= transaction.type
-            tr
               th amount
               td= transaction.amount
             tr
               th status
               td= transaction.status
-            tr
-              th createdAt
-              td= transaction.createdAt
-            tr
-              th updatedAt
-              td= transaction.updatedAt
 
       section
         h5 Payment
 
         table(cellpadding="0" cellspacing="0")
           tbody
-            tr
-              th token
-              td= transaction.creditCard.token
-            tr
-              th bin
-              td= transaction.creditCard.bin
-            tr
-              th last4
-              td= transaction.creditCard.last4
-            tr
-              th cardType
-              td= transaction.creditCard.cardType
-            tr
-              th expirationDate
-              td= transaction.creditCard.expirationDate
-            tr
-              th cardholderName
-              td= transaction.creditCard.cardholderName
-            tr
-              th customerLocation
-              td= transaction.creditCard.customerLocation
+            if transaction.paymentMethodDetails
+              if transaction.paymentMethodDetails.card
+                tr
+                  th brand
+                  td= transaction.paymentMethodDetails.card.brand
+                tr
+                  th last4
+                  td= transaction.paymentMethodDetails.card.last4
+                tr
+                  th exp_month
+                  td= transaction.paymentMethodDetails.card.exp_month
+                tr
+                  th exp_year
+                  td= transaction.paymentMethodDetails.card.exp_year
+                tr
+                  th funding
+                  td= transaction.paymentMethodDetails.card.funding
+              else if transaction.paymentMethodDetails.paypal
+                tr
+                  th type
+                  td PayPal
+                tr
+                  th payer_email
+                  td= transaction.paymentMethodDetails.paypal.payer_email
+                tr
+                  th payer_id
+                  td= transaction.paymentMethodDetails.paypal.payer_id
+            else if transaction.creditCard
+              tr
+                th token
+                td= transaction.creditCard.token
+              tr
+                th bin
+                td= transaction.creditCard.bin
+              tr
+                th last4
+                td= transaction.creditCard.last4
+              tr
+                th cardType
+                td= transaction.creditCard.cardType
+              tr
+                th expirationDate
+                td= transaction.creditCard.expirationDate
+              tr
+                th cardholderName
+                td= transaction.creditCard.cardholderName
+              tr
+                th customerLocation
+                td= transaction.creditCard.customerLocation
 
-      if transaction.customerDetails
+      if transaction.customer || transaction.customerDetails
         section
           h5 Customer
 
           table(cellpadding="0" cellspacing="0")
             tbody
-              tr
-                th id
-                td= transaction.customer.id
-              tr
-                th firstName
-                td= transaction.customer.firstName
-              tr
-                th lastName
-                td= transaction.customer.lastName
-              tr
-                th email
-                td= transaction.customer.email
-              tr
-                th company
-                td= transaction.customer.company
-              tr
-                th website
-                td= transaction.customer.website
-              tr
-                th phone
-                td= transaction.customer.phone
-              tr
-                th fax
-                td= transaction.customer.fax
+              if transaction.customer
+                tr
+                  th id
+                  td= transaction.customer
+              else if transaction.customerDetails
+                tr
+                  th id
+                  td= transaction.customer.id
+                tr
+                  th firstName
+                  td= transaction.customer.firstName
+                tr
+                  th lastName
+                  td= transaction.customer.lastName
+                tr
+                  th email
+                  td= transaction.customer.email
+                tr
+                  th company
+                  td= transaction.customer.company
+                tr
+                  th website
+                  td= transaction.customer.website
+                tr
+                  th phone
+                  td= transaction.customer.phone
+                tr
+                  th fax
+                  td= transaction.customer.fax
 
       section
-        p.center.small Integrate with the Braintree SDK for a secure and seamless checkout
+        if transaction.id && transaction.id.startsWith('pi_')
+          p.center.small Integrate with the Stripe SDK for a secure and seamless checkout
+        else
+          p.center.small Integrate with the Braintree SDK for a secure and seamless checkout
       section
-        a.button.secondary.full(href="https://developers.braintreepayments.com/guides/drop-in", target="_blank") 
-          span See the Docs
+        if transaction.id && transaction.id.startsWith('pi_')
+          a.button.secondary.full(href="https://stripe.com/docs/payments", target="_blank") 
+            span See the Docs
+        else
+          a.button.secondary.full(href="https://developers.braintreepayments.com/guides/drop-in", target="_blank") 
+            span See the Docs

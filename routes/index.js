@@ -1,30 +1,19 @@
-const { Router } = require('express');
-const { Transaction } = require('braintree');
+const express = require('express');
+const { Router } = express;
 const logger = require('debug');
-const gateway = require('../lib/gateway');
+const stripeGateway = require('../lib/stripe-gateway');
 
-const router = Router(); // eslint-disable-line new-cap
-const debug = logger('braintree_example:router');
+const router = Router();
+const debug = logger('stripe_example:router');
+
 const TRANSACTION_SUCCESS_STATUSES = [
-  Transaction.Status.Authorizing,
-  Transaction.Status.Authorized,
-  Transaction.Status.Settled,
-  Transaction.Status.Settling,
-  Transaction.Status.SettlementConfirmed,
-  Transaction.Status.SettlementPending,
-  Transaction.Status.SubmittedForSettlement,
+  'succeeded',
+  'processing',
+  'requires_capture',
+  'Settled',
+  'Authorized',
+  'SubmittedForSettlement',
 ];
-
-function formatErrors(errors) {
-  let formattedErrors = '';
-
-  for (let [, { code, message }] of Object.entries(errors)) {
-    formattedErrors += `Error: ${code}: ${message}
-`;
-  }
-
-  return formattedErrors;
-}
 
 function createResultObject({ status }) {
   let result;
@@ -34,13 +23,13 @@ function createResultObject({ status }) {
       header: 'Sweet Success!',
       icon: 'success',
       message:
-        'Your test transaction has been successfully processed. See the Braintree API response and try again.',
+        'Your test transaction has been successfully processed. See the Stripe API response and try again.',
     };
   } else {
     result = {
       header: 'Transaction Failed',
       icon: 'fail',
-      message: `Your test transaction has a status of ${status}. See the Braintree API response and try again.`,
+      message: `Your test transaction has a status of ${status}. See the Stripe API response and try again.`,
     };
   }
 
@@ -52,55 +41,164 @@ router.get('/', (req, res) => {
 });
 
 router.get('/checkouts/new', (req, res) => {
-  gateway.clientToken.generate({}).then(({ clientToken }) => {
-    res.render('checkouts/new', {
-      clientToken,
-      messages: req.flash('error'),
-    });
+  res.render('checkouts/new', {
+    clientToken: stripeGateway.getPublishableKey(),
+    messages: req.flash('error'),
+    useStripe: true,
   });
 });
 
-router.get('/checkouts/:id', (req, res) => {
+router.get('/checkouts/complete', async (req, res) => {
+  const { payment_intent, redirect_status } = req.query;
+
+  debug(
+    'Checkout complete - payment_intent: %s, redirect_status: %s',
+    payment_intent,
+    redirect_status
+  );
+
+  if (redirect_status === 'succeeded' && payment_intent) {
+    res.redirect(`/checkouts/${payment_intent}`);
+  } else {
+    req.flash('error', { msg: 'Payment was not completed' });
+    res.redirect('/checkouts/new');
+  }
+});
+
+router.get('/checkouts/:id', async (req, res) => {
   let result;
   const transactionId = req.params.id;
 
-  gateway.transaction.find(transactionId).then((transaction) => {
+  try {
+    const transaction = await stripeGateway.transaction.find(transactionId);
+
     result = createResultObject(transaction);
     res.render('checkouts/show', { transaction, result });
-  });
+  } catch (error) {
+    debug('Error retrieving transaction: %O', error);
+    req.flash('error', { msg: 'Transaction not found' });
+    res.redirect('/checkouts/new');
+  }
 });
 
-router.post('/checkouts', (req, res) => {
-  // In production you should not take amounts directly from clients
-  const { amount, payment_method_nonce: paymentMethodNonce } = req.body;
+router.post('/api/create-payment-intent', async (req, res) => {
+  const { amount } = req.body;
 
-  gateway.transaction
-    .sale({
-      amount,
-      paymentMethodNonce,
-      options: { submitForSettlement: true },
-    })
-    .then((result) => {
-      const { success, transaction } = result;
+  try {
+    const paymentIntent = await stripeGateway.createPaymentIntent(amount);
 
-      return new Promise((resolve, reject) => {
-        if (success || transaction) {
-          res.redirect(`checkouts/${transaction.id}`);
-
-          resolve();
-        }
-
-        reject(result);
-      });
-    })
-    .catch(({ errors }) => {
-      const deepErrors = errors.deepErrors();
-
-      debug('errors from transaction.sale %O', deepErrors);
-
-      req.flash('error', { msg: formatErrors(deepErrors) });
-      res.redirect('checkouts/new');
+    res.json({
+      clientSecret: paymentIntent.client_secret,
+      paymentIntentId: paymentIntent.id,
     });
+  } catch (error) {
+    debug('Error creating payment intent: %O', error);
+    res.status(400).json({
+      error: 'Payment intent creation failed. Please try again.',
+    });
+  }
+});
+
+router.post('/checkouts', async (req, res) => {
+  const { payment_intent_id: paymentIntentId } = req.body;
+
+  if (!paymentIntentId) {
+    req.flash('error', { msg: 'Payment intent ID is required' });
+
+    return res.redirect('checkouts/new');
+  }
+
+  try {
+    const paymentIntent = await stripeGateway.retrievePaymentIntent(
+      paymentIntentId
+    );
+
+    if (paymentIntent.status === 'succeeded') {
+      res.redirect(`/checkouts/${paymentIntentId}`);
+    } else if (
+      paymentIntent.status === 'requires_action' ||
+      paymentIntent.status === 'requires_confirmation'
+    ) {
+      req.flash('error', { msg: 'Payment requires additional verification' });
+      res.redirect('checkouts/new');
+    } else {
+      req.flash('error', {
+        msg: `Payment failed with status: ${paymentIntent.status}`,
+      });
+      res.redirect('checkouts/new');
+    }
+  } catch (error) {
+    debug('Error processing Stripe payment: %O', error);
+    req.flash('error', { msg: 'Payment processing failed' });
+    res.redirect('checkouts/new');
+  }
+});
+
+router.post('/stripe/webhooks', async (req, res) => {
+  const sig = req.headers['stripe-signature'];
+  const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
+
+  if (!webhookSecret) {
+    debug('Webhook secret not configured');
+
+    return res.status(500).send('Webhook secret not configured');
+  }
+
+  let event;
+
+  try {
+    event = stripeGateway.constructWebhookEvent(req.body, sig, webhookSecret);
+  } catch (err) {
+    debug('Webhook signature verification failed: %O', err);
+    return res.status(400).send('Webhook signature verification failed');
+  }
+
+  try {
+    switch (event.type) {
+      case 'payment_intent.succeeded': {
+        const paymentIntent = event.data.object;
+
+        debug('PaymentIntent succeeded: %s', paymentIntent.id);
+        break;
+      }
+
+      case 'payment_intent.payment_failed': {
+        const failedPayment = event.data.object;
+
+        debug('PaymentIntent failed: %s', failedPayment.id);
+        break;
+      }
+
+      case 'payment_method.attached': {
+        const paymentMethod = event.data.object;
+
+        debug('PaymentMethod attached: %s', paymentMethod.id);
+        break;
+      }
+
+      case 'customer.created': {
+        const customer = event.data.object;
+
+        debug('Customer created: %s', customer.id);
+        break;
+      }
+
+      case 'charge.refunded': {
+        const charge = event.data.object;
+
+        debug('Charge refunded: %s', charge.id);
+        break;
+      }
+
+      default:
+        debug('Unhandled event type: %s', event.type);
+    }
+
+    res.json({ received: true });
+  } catch (error) {
+    debug('Error handling webhook event: %O', error);
+    res.status(500).send('Webhook handler error');
+  }
 });
 
 module.exports = router;

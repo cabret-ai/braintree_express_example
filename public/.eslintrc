@@ -1,5 +1,9 @@
 {
-  "extends": ["braintree/client", "plugin:prettier/recommended"],
+  "extends": ["plugin:prettier/recommended"],
+  "env": {
+    "browser": true,
+    "es6": true
+  },
   "rules": {
     "strict": 0,
     "no-invalid-this": 0,
